@@ -7,7 +7,7 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 llm = ChatNVIDIA(model="mistralai/mixtral-8x7b-instruct-v0.1")
 
-
+################
 # Character Generation
 
 class Character(BaseModel):
@@ -17,6 +17,9 @@ class Character(BaseModel):
 
 class CharsList(BaseModel):
     characters: List[Character] = Field(description="list of characters")
+
+class CharsList_Input2(BaseModel):
+    input: CharsList = Field(description="field named input")
 
 # Set up a parser + inject instructions into the prompt template.
 parserChars = JsonOutputParser(pydantic_object=CharsList)   
@@ -38,7 +41,7 @@ llm_chain_gen_chars = PromptTemplate(template=template_gen_chars,
                                      input_variables=["number_of_characters"],
                                      partial_variables={"format_instructions":parserChars.get_format_instructions()})|llm|parserChars
 
-
+################
 # Character generation expansion
 
 class chars_expand_llm_Input(BaseModel):
@@ -53,7 +56,7 @@ according to a short description of {short_description}. """
 llm_chars_expand = PromptTemplate(template=template_expand_char, 
                     input_variables=["name", "short_description"]) |llm|StrOutputParser()
 
-
+################
 # Victim Generation
 
 # Set up a parser + inject instructions into the prompt template.
@@ -71,11 +74,39 @@ victim_llm = PromptTemplate(template=template_victim,
                             input_variables=['characters'],
                             partial_variables={"format_instructions":parser_victim.get_format_instructions()}) |llm|parser_victim
 
-
+################
 # motive generation
-tempale_motive = "Generate a motive for a killing vicitim {victim_name} - {victim_short_description} in a mystery murder game for the following character {name} - {shrt_bio}:\n"
+class llm_motiv_Input(BaseModel):
+    victim_name: str = Field(description="victim name")
+    victim_short: str = Field(description="short description of the victim") 
+    name: str = Field(description="character name")
+    short_bio: str = Field(description="short description of the character")
+
+class llm_motiv_Input2(BaseModel):
+    input: llm_motiv_Input = Field(description="field named input")
+
+
+tempale_motive = """Generate a motive for a killing vicitim {victim_name} - {victim_short_description}
+ in a mystery murder game for the following character {name} - {short_bio}
+ """
 llm_motiv = PromptTemplate(template=tempale_motive, 
-                            input_variables=["victim_name", "victim_short_description", "name", "shrt_bio"])|llm|StrOutputParser()
+                            input_variables=["victim_name",
+                                              "victim_short_description",
+                                                "name",
+                                                  "short_bio"])|llm|StrOutputParser()
+
+################
+# secret generation
+
+class llm_secret_Input(BaseModel):
+    character: str = Field(description="character name")
+    victim: str = Field(description="victim name")
+    secret_holder: str = Field(description="name of a character that knows a secret about other character")
+    character_full: CharsList = Field(description="list of characters")
+    victim_short: str = Field(description="short description of the victim") 
+
+class llm_secret_Input2(BaseModel):
+    input: llm_secret_Input = Field(description="field named input")
 
 tempale_secret = """generate a secret that {secret_holder} knows about the relation of {character} with {victim}. 
 the secret is related whith the murder of {victim} in a mistery murder game but gives no information about the murder itself.\n
@@ -96,6 +127,7 @@ llm_secret = PromptTemplate(template=tempale_secret,
                       "secret_holder", "character_full",
                       "victim_short"])|llm|StrOutputParser()
 
+################
 # murder circustances
 
 class llm_murder_Input(BaseModel):
@@ -116,10 +148,20 @@ tempale_murder += "the characters of the game are: {characters}\n"""
 tempale_murder += "use the following format <time of death> - <circustances> "
 
 llm_murder = PromptTemplate(template=tempale_murder, 
-    input_variables=[ "victim", "murderer", "characters"])|llm|StrOutputParser()
+    input_variables=[ "victim","victim_short", "murderer", "characters"])|llm|StrOutputParser()
 
+################
 # generate an alibi for everybody except for teh murderer
 # Define your desired data structure.
+
+class llm_alibi_Input(BaseModel):
+    character: str = Field(description="character name")
+    circustances: str = Field(description="murderer circustances")
+    rest_chars: List[Character] = Field(description="list of characters")
+
+class llm_alibi_Input2(BaseModel):
+    input: llm_alibi_Input = Field(description="field named input")
+
 class Alibi(BaseModel):
     witness: str = Field(description="name of the character who can confirm the alibi. use the exact name provided.")
     alibi: str = Field(description="alibi")
@@ -142,5 +184,7 @@ The characters of the story are: {rest_chars}
 templae_alibi += "Give the answer in the following format: \n {format_instructions}\n"
 
 llm_alibi = PromptTemplate(template=templae_alibi, 
-                                input_variables=["character", "rest_chars", "circustances"],
+                                input_variables=["character",
+                                                  "rest_chars",
+                                                    "circustances"],
                                 partial_variables={"format_instructions":parserAlibi.get_format_instructions()}) |llm|parserAlibi
