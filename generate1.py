@@ -63,7 +63,7 @@ for c in chars_final:
     print(c)
     motive = llm_motiv.invoke({'victim_name':victim['name'], 
                                'victim_short_description':victim['short'], 
-                               'name':c['name'], 'shrt_bio':c['short']})
+                               'name':c['name'], 'short_bio':c['short']})
     print(motive)
     c['motive'] = motive
 

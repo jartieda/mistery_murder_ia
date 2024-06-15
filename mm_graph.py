@@ -113,6 +113,7 @@ def draw_graph(graphout):
             r['type'] is not None and 
             r['source'] is not None and
             r['target'] is not None):
+            print(r['source'], r['target'], r['type'])
             G.add_edge(r['source'], r['target'], label=r['type'])
         
     # Visualize the knowledge graph
