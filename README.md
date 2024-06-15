@@ -24,7 +24,7 @@ First aproach to the problem is using a chain of prompts to create the story. Th
 
 To check the consistency of the story LLM are used to create a knowledge graph with all the variableas of the story. this knowledgraph can be represented in a diagram to quick review the story. 
 
-![Example consistency graph](graph.png "Example consistency graph")
+![Example consistency graph](example\graph.png "Example consistency graph")
 
 # Agent based solution
 
@@ -45,7 +45,7 @@ NVIDIA_API_KEY='nvapi-xxxxxxxxxxxxx'
 
 
 # chars structure
-'''
+```
 chars_final = [ {"name": 
                 "short":
                 "long_bio": 
@@ -57,4 +57,4 @@ victim ={"name":
         "long_bio":}
 
 murderer: int
-'''
+```
