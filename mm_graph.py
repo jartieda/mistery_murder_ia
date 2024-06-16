@@ -28,6 +28,7 @@ class Relationship(BaseRelationship):
     properties: Optional[List[Property]] = Field(
         None, description="List of relationship properties"
     )
+
 class KnowledgeGraph(BaseModel):
     """Generate a knowledge graph with entities and relationships."""
     nodes: List[BaseNode] = Field(
@@ -36,11 +37,19 @@ class KnowledgeGraph(BaseModel):
         ..., description="List of relationships in the knowledge graph"
     )
 
-
 # %%
 llm_long_output = ChatNVIDIA(model="mistralai/mixtral-8x7b-instruct-v0.1", 
                              max_tokens=3000,
                              temperature=1,)
+#llm_long_output = ChatNVIDIA(model="meta/llama3-70b-instruct", 
+#                             max_tokens=3000,
+#                             temperature=1,)
+#llm_long_output = ChatNVIDIA(model="google/gemma-7b", 
+#                             max_tokens=3000,
+#                             temperature=1,)
+#llm_long_output = ChatNVIDIA(model="meta/llama3-8b-instruct", 
+#                             max_tokens=3000,
+#                             temperature=1,)
 
 def get_extraction_chain(
     allowed_nodes: Optional[List[str]] = None,
@@ -87,7 +96,6 @@ Use the following format for the output: """ +"{format_instructions}"
                                 partial_variables={"format_instructions":parser.get_format_instructions()}) |llm_long_output|parser
     return graph_llm
 
-
 def extract_and_store_graph(
             document: Document,
             nodes:Optional[List[str]] = None,
@@ -102,7 +110,13 @@ def extract_and_store_graph(
     #print(data)
     return data
 
-
+def extract_graph_tool(
+        input: str,
+):
+    extract_and_store_graph(Document(page_content=input),
+                            nodes=["person", "victim"],
+                            rels=["killed", "alibi", "motive", "knows_about"])
+    
 def draw_graph(graphout):
     # Create a knowledge graph
     G = nx.DiGraph()

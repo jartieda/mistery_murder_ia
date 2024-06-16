@@ -9,6 +9,9 @@ From the AI perspective there are several challenges for generating this Rol-gam
 - Problem complexity grows with the number of players. 
 - Complex information must be transferred between prompts. 
 
+![MMD Tools](example/tools.gif "MMD Tools")
+
+
 # Chain based solution
 
 First approach to the problem is using a chain of prompts to create the story. The following prompts are defined: 

@@ -28,6 +28,9 @@ from mm_tools import (llm_chain_gen_chars, llm_chars_expand, victim_llm,
 from mm_graph import draw_graph, extract_and_store_graph
 # %%
 llm = ChatNVIDIA(model="mistralai/mixtral-8x7b-instruct-v0.1")
+#llm = ChatNVIDIA(model="meta/llama3-70b-instruct")
+#llm = ChatNVIDIA(model="google/gemma-7b")
+#llm = ChatNVIDIA(model="meta/llama3-8b-instruct")
 
 # %% 
 #generte characters
@@ -172,23 +175,13 @@ with open('temp.md', 'w') as file:
 
 print(result_md)
 
-# %%
-
-
     
 # %%
 doc =  Document(page_content=result_md, metadata={"source": "local"})
 
-graphout = extract_and_store_graph(doc,nodes = ["peron", "victim"], rels=["knows_about", "murdered", "alibi",
+graphout = extract_and_store_graph(doc,nodes = ["person", "victim"], 
+                                   rels=["knows_about", "murdered", "alibi",
                                           "motive"])
 
 draw_graph(graphout)
-# %%
-
-
-
-# %%
-
-# %%
-
 # %%

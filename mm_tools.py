@@ -6,6 +6,8 @@ from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 llm = ChatNVIDIA(model="mistralai/mixtral-8x7b-instruct-v0.1")
+#llm = ChatNVIDIA(model="google/gemma-7b")
+#llm = ChatNVIDIA(model="meta/llama3-8b-instruct")
 
 ################
 # Character Generation
@@ -30,7 +32,9 @@ class llm_chain_gen_chars_Input2(BaseModel):
     input: llm_chain_gen_chars_Input = Field(description="field named input")
 
 template_gen_chars = """Generate {number_of_characters} characters of a mistery murder game. 
-do not generate a character for the victim. None of them should be a detective or a policeman. None of them is the murderer
+do not generate a character for the victim. 
+None of them should be a detective or a policeman. 
+None of them is the murderer
 Give the answer in the following form:  
 {format_instructions}
 

@@ -17,8 +17,13 @@ from aux_tools import render_text_description_and_nested_args
 from mm_tools import ( CharsList, CharsList_Input2, chars_expand_llm_Input, func_alibi, func_chars_expand, func_gen_chars, func_motive, func_murder, func_secret, func_victim, llm_alibi_Input, llm_alibi_Input2, llm_chain_gen_chars, llm_chain_gen_chars_Input, llm_chars_expand, llm_motiv_Input, llm_motiv_Input2, llm_murder_Input, llm_secret_Input, llm_secret_Input2, llm_victim_Input, victim_llm,
                         llm_secret, llm_murder, llm_alibi, llm_motiv)
 from mm_tools import llm_chain_gen_chars_Input2, llm_murder_Input2, chars_expand_llm_Input2
+from mm_graph import extract_graph_tool
+
 # %%
 llm = ChatNVIDIA(model="mistralai/mixtral-8x7b-instruct-v0.1")
+#llm = ChatNVIDIA(model="meta/llama3-70b-instruct")
+#llm = ChatNVIDIA(model="google/gemma-7b")
+#llm = ChatNVIDIA(model="meta/llama3-8b-instruct")
 
 
 tools=[
@@ -59,6 +64,10 @@ tools=[
                                  name="alibi_tool",
                                  args_schema=llm_alibi_Input,
                                  description="Useful when you want to generate an alibi for a character. Output is the generated alib."
+    ),
+    StructuredTool.from_function(func=extract_graph_tool,
+                                 name="extract_graph_tool",
+                                 description="Usefull to generate a compact representation of the story to be validated. Output is a knowledge graph of the story."
     ),
     
     ]
