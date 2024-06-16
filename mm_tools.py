@@ -41,6 +41,9 @@ llm_chain_gen_chars = PromptTemplate(template=template_gen_chars,
                                      input_variables=["number_of_characters"],
                                      partial_variables={"format_instructions":parserChars.get_format_instructions()})|llm|parserChars
 
+def func_gen_chars(number_of_characters):
+    llm_chain_gen_chars.invoke({"number_of_characters": number_of_characters})
+
 ################
 # Character generation expansion
 
@@ -56,8 +59,13 @@ according to a short description of {short_description}. """
 llm_chars_expand = PromptTemplate(template=template_expand_char, 
                     input_variables=["name", "short_description"]) |llm|StrOutputParser()
 
+def func_chars_expand(name, short_description):
+    return llm_chars_expand.invoke({'name':name, 'short_description':short_description})
+
 ################
 # Victim Generation
+class llm_victim_Input(BaseModel):
+    characters: str = Field(description="characters sumary")
 
 # Set up a parser + inject instructions into the prompt template.
 parser_victim = JsonOutputParser(pydantic_object=Character)   
@@ -73,6 +81,9 @@ print(template_victim)
 victim_llm = PromptTemplate(template=template_victim,
                             input_variables=['characters'],
                             partial_variables={"format_instructions":parser_victim.get_format_instructions()}) |llm|parser_victim
+
+def func_victim(characters):
+    return victim_llm.invoke({'characters': characters})
 
 ################
 # motive generation
@@ -94,6 +105,11 @@ llm_motiv = PromptTemplate(template=tempale_motive,
                                               "victim_short_description",
                                                 "name",
                                                   "short_bio"])|llm|StrOutputParser()
+
+def func_motive(victim_name, victim_short, name, short_bio):
+    return llm_motiv.invoke({'victim_name':victim_name, 
+                               'victim_short_description':victim_short, 
+                               'name':name, 'short_bio':short_bio})
 
 ################
 # secret generation
@@ -127,6 +143,13 @@ llm_secret = PromptTemplate(template=tempale_secret,
                       "secret_holder", "character_full",
                       "victim_short"])|llm|StrOutputParser()
 
+def func_secret(character, victim, victim_short, secret_holder, character_full):
+    return llm_secret.invoke({'character':character,
+                                'victim':victim, 
+                                'victim_short': victim_short,
+                                'secret_holder': secret_holder,
+                                'character_full': character_full})
+
 ################
 # murder circustances
 
@@ -149,6 +172,13 @@ tempale_murder += "use the following format <time of death> - <circustances> "
 
 llm_murder = PromptTemplate(template=tempale_murder, 
     input_variables=[ "victim","victim_short", "murderer", "characters"])|llm|StrOutputParser()
+
+def func_murder(victim, victim_short, murderer, characters):
+    return llm_murder.invoke({'victim':victim, 
+                                'victim_short': victim_short,
+                                'murderer':murderer, 
+                                'characters': characters
+                            })
 
 ################
 # generate an alibi for everybody except for teh murderer
@@ -188,3 +218,10 @@ llm_alibi = PromptTemplate(template=templae_alibi,
                                                   "rest_chars",
                                                     "circustances"],
                                 partial_variables={"format_instructions":parserAlibi.get_format_instructions()}) |llm|parserAlibi
+
+def func_alibi(character, rest_chars, circustances):
+     return llm_alibi.invoke({"character": character, 
+                                 "rest_chars": rest_chars, 
+                                 "circustances": circustances})  
+        
+        
