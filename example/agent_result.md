@@ -1,6 +1,7 @@
 
 
 > Entering new AgentExecutor chain...
+> 
  Thought: To create a mystery murder story for 5 people, I need to first generate a set of characters, expand their bios, determine the victim, motive, and secret, and finally describe the murder and alibis. I will use the provided tools in the following order: Generate\_characterset\_tool, expand\_char\_bio\_tool (5 times), victim\_tool, motive\_tool, secret\_tool, murder\_tool, and alibi\_tool (4 times).
 
 Action:
@@ -27,7 +28,6 @@ Action:
 ```
 
 Observation Character 1: The Charming Aristocrat
-====================================
 
 Lord Alec Livingston is the epitome of charm and sophistication. Born into a wealthy and influential family, Alec has always enjoyed the finer things in life. He is well-educated, well-traveled, and has a keen eye for art and fashion. His wit and charisma have made him a popular figure in high society, and he is always the life of the party.
 
@@ -36,6 +36,7 @@ However, despite his charming exterior, there is a darker side to Alec. He has a
 As the game progresses, players will uncover more about Alec's past and his motivations. They will discover that he has a complicated relationship with his family, and that he is hiding a deep, dark secret. As they delve deeper into the mystery, they will have to decide whether or not they can trust Alec, and whether or not he is capable of committing the ultimate crime.
 
 Short Description of Character 1:
+
 Alec Livingston is a charming and sophisticated aristocrat with a reputation for being ruthless and cunning. He is well-educated, well-traveled, and has a keen eye for art and fashion. However, there is a darker side to Alec, and players will have to decide whether or not they can trust him as they uncover the mystery behind the murder. I will now expand the bios for the remaining characters using the `expand_char_bio_tool`.
 
 Action:
