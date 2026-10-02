@@ -24,7 +24,7 @@ gcloud auth application-default login
 gcloud config set project YOUR_GOOGLE_CLOUD_PROJECT
 gcloud services enable aiplatform.googleapis.com
 export GOOGLE_CLOUD_PROJECT=YOUR_GOOGLE_CLOUD_PROJECT
-export GOOGLE_CLOUD_LOCATION=us-central1
+export GOOGLE_CLOUD_LOCATION=global
 ```
 
 The model defaults to `gemini-2.5-flash`. Override it with `GEMINI_MODEL` when needed.
@@ -52,7 +52,9 @@ Use `--no-graph` to skip the graph. The legacy `generate_with_agent.py` command 
 
 ## Validation
 
-The generator checks cast size and uniqueness, murderer and witness references, secret subjects, per-character motives, and clue references before writing files. Death time and every whereabouts interval use 24-hour `HH:MM`; each account must cover the death time, and a witness must share the stated location and provide a bounded observation interval. The murderer cannot have a witness covering the moment of death. Exactly one Act II clue is required to carry a specific weapon-to-origin comparison, which is printed in the player reveal rather than being left only in the facilitator solution. Generation retries up to three times when the returned case fails these checks. The checks cover structured consistency; they do not replace a human review of narrative plausibility.
+The generator checks cast size and uniqueness, murderer and witness references, secret subjects, per-character motives, and clue references before writing files. Death time and every whereabouts interval use 24-hour `HH:MM`; each account must cover the death time, and a witness must share the stated location and provide a bounded observation interval. When Gemini names a witness but omits the observed interval, the generator infers a five-minute window only if both accounts overlap in time and location; it will not infer a window over the culprit's death minute. The murderer cannot have a witness covering the moment of death. An intentional false or partial whereabouts claim must be marked with a facilitator explanation and a clue that lets players expose it. Exactly one Act II clue is required to carry a specific weapon-to-origin comparison, which is printed in the player reveal rather than being left only in the facilitator solution.
+
+After local validation, a Gemini reviewer checks the canonical case alongside the rendered player handout, role packets, Act II reveal, and facilitator solution for contradictions and fair-play solvability. It may request up to two targeted repairs. The selected culprit, player roster, and gender assignments are immutable during repair. If major issues remain after the repair limit, generation stops with an error rather than writing unapproved materials. This semantic review adds Gemini calls and is still a model-based check; facilitators should review the final case before play.
 
 Run the offline checks with:
 

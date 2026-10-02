@@ -56,8 +56,18 @@ class Whereabouts(BaseModel):
         default=None,
         description="End of the interval directly observed by the named witness, in 24-hour HH:MM format.",
     )
-
-
+    claim_truthfulness: Literal["truthful", "partial", "deliberate_lie"] = Field(
+        default="truthful",
+        description="Facilitator-only assessment. Mark deliberate_lie only when the character knowingly gives a false account.",
+    )
+    lie_explanation: str | None = Field(
+        default=None,
+        description="Facilitator-only explanation for a partial or deliberate false whereabouts claim.",
+    )
+    exposure_clue_title: str | None = Field(
+        default=None,
+        description="Exact clue title that allows players to discover a false or incomplete account.",
+    )
 class Clue(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -96,6 +106,24 @@ class MysteryCase(BaseModel):
     solution: str = Field(min_length=80)
 
 
+class CaseReviewIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    severity: Literal["critical", "major", "minor"]
+    category: str
+    explanation: str = Field(min_length=10)
+    affected_fields: list[str] = Field(min_length=1)
+    suggested_fix: str = Field(min_length=10)
+
+
+class CaseReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool
+    summary: str = Field(min_length=10)
+    issues: list[CaseReviewIssue]
+
+
 CASE_PROMPT = """Create a playable, logically consistent murder-mystery case for exactly {count} player characters.
 Return one complete case matching the requested structured schema.
 
@@ -106,12 +134,14 @@ Quality requirements:
 - The victim is not one of the player characters. Choose exactly one murderer from the player characters.
 - Give every player character one motive, one private secret to know, and one whereabouts account. Set an estimated death time as 24-hour HH:MM. Every whereabouts account must include a concise location and a start/end interval in HH:MM that covers the death time; keep the case in the same evening and do not cross midnight.
 - For a named witness, give the exact interval they directly observed, use the same location for both characters, and make the observation interval fit within both characters' whereabouts intervals. It must not cover the murder time for the murderer; do not accidentally give the murderer a witnessed alibi at the time of death.
+- A whereabouts claim normally describes a true account. The murderer may deliberately lie, but mark claim_truthfulness='deliberate_lie', explain the true events in lie_explanation, and set exposure_clue_title to a clue that lets players discover the lie. Do not let solution events contradict an account marked truthful. Partial accounts also require an explanation and a clue that reveals what was omitted.
 - Each motive must explain why that named character might kill this victim; never swap the killer and victim roles.
 - Give each player one secret about a different player character (never the victim). Each secret should make its subject look potentially guilty, without proving guilt or revealing who the murderer is. Arrange the secrets so each player holds one secret and is the subject of exactly one secret.
 - Whereabouts accounts are claims, not guaranteed proof of innocence. Use an optional witness only when that character can plausibly corroborate the account. Do not make every non-murderer conclusively innocent.
 - Provide at least three concrete clues, with at least one clue revealed in each of Acts I and II. Their implications may be ambiguous and should leave several plausible suspects. At least one clue should be consistent with the actual murderer.
 - Set weapon_name, weapon_owner_name, weapon_origin, and weapon_signature to concrete facts. weapon_owner_name must be the murderer, and weapon_origin must identify a specific place controlled by that character. The weapon_signature must be a distinctive, verifiable physical feature, not a generic property like color alone. Exactly one Act II clue must set weapon_match=true and describe the fragment or trace of this weapon. The generator will add a public forensic comparison using these fields, so the weapon-to-origin link must be accurate, specific, and consistent with the solution.
 - The solution must identify the murderer and explain the method, motive, timeline, and how the clues support the answer. Keep this solution out of the player-facing introduction and clue descriptions.
+- Never create an unexplained mismatch between a character's whereabouts account and the solution timeline. Either make the account compatible, or explicitly mark a deliberate lie/partial account with a revealing clue.
 - Reuse names exactly and consistently in every reference. Do not invent additional people who could be suspects or witnesses.
 
 Requested player-character count: {count}
@@ -167,6 +197,10 @@ OUTPUT_TEXT = {
         "whereabouts_claims": "Whereabouts claims",
         "witness_none": "none",
         "clue_implications": "Clue implications",
+        "deceptive_accounts": "False or partial whereabouts claims",
+        "claim_truthfulness": "Claim status",
+        "lie_explanation": "Facilitator explanation",
+        "exposure_clue": "Exposure clue",
     },
     "Spanish": {
         "victim": "La víctima",
@@ -215,6 +249,10 @@ OUTPUT_TEXT = {
         "whereabouts_claims": "Versiones sobre los movimientos",
         "witness_none": "ninguno",
         "clue_implications": "A quién apuntan las pistas",
+        "deceptive_accounts": "Versiones falsas o parciales sobre movimientos",
+        "claim_truthfulness": "Veracidad de la versión",
+        "lie_explanation": "Explicación para quien dirige la partida",
+        "exposure_clue": "Pista que revela la mentira",
     },
 }
 
@@ -234,7 +272,7 @@ def get_model():
         model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         vertexai=True,
         project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
-        location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
         temperature=0.55,
         model_kwargs={"automatic_function_calling": {"disable": True}},
     )
@@ -245,6 +283,81 @@ def _clock_minutes(value: str) -> int | None:
         return None
     hours, minutes = map(int, value.split(":"))
     return hours * 60 + minutes
+
+
+def _format_clock(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def infer_missing_witness_intervals(case: MysteryCase) -> tuple[MysteryCase, list[str]]:
+    whereabouts_by_name = {item.character_name: item for item in case.whereabouts}
+    murder_minute = _clock_minutes(case.murder_time)
+    updated_whereabouts: list[Whereabouts] = []
+    inferred_for: list[str] = []
+
+    for item in case.whereabouts:
+        if (
+            item.witness_name is None
+            or (item.witnessed_start_time and item.witnessed_end_time)
+        ):
+            updated_whereabouts.append(item)
+            continue
+
+        witness = whereabouts_by_name.get(item.witness_name)
+        if (
+            witness is None
+            or witness.location.casefold().strip() != item.location.casefold().strip()
+        ):
+            updated_whereabouts.append(item)
+            continue
+
+        subject_start = _clock_minutes(item.start_time)
+        subject_end = _clock_minutes(item.end_time)
+        witness_start = _clock_minutes(witness.start_time)
+        witness_end = _clock_minutes(witness.end_time)
+        if None in (subject_start, subject_end, witness_start, witness_end):
+            updated_whereabouts.append(item)
+            continue
+
+        overlap_start = max(subject_start, witness_start)
+        overlap_end = min(subject_end, witness_end)
+        if overlap_end <= overlap_start:
+            updated_whereabouts.append(item)
+            continue
+
+        if item.witnessed_start_time:
+            specified_start = _clock_minutes(item.witnessed_start_time)
+            if specified_start is None:
+                updated_whereabouts.append(item)
+                continue
+            overlap_start = max(overlap_start, specified_start)
+        if item.witnessed_end_time:
+            specified_end = _clock_minutes(item.witnessed_end_time)
+            if specified_end is None:
+                updated_whereabouts.append(item)
+                continue
+            overlap_end = min(overlap_end, specified_end)
+
+        if item.character_name == case.murderer_name and murder_minute is not None:
+            if overlap_start < murder_minute:
+                overlap_end = min(overlap_end, murder_minute - 1)
+            else:
+                overlap_start = max(overlap_start, murder_minute + 1)
+        if overlap_end <= overlap_start:
+            updated_whereabouts.append(item)
+            continue
+
+        observed_start = max(overlap_start, overlap_end - 5)
+        inferred = item.model_copy(
+            update={
+                "witnessed_start_time": _format_clock(observed_start),
+                "witnessed_end_time": _format_clock(overlap_end),
+            }
+        )
+        updated_whereabouts.append(inferred)
+        inferred_for.append(item.character_name)
+
+    return case.model_copy(update={"whereabouts": updated_whereabouts}), inferred_for
 
 
 def validate_case(
@@ -351,6 +464,21 @@ def validate_case(
         elif item.witnessed_start_time is not None or item.witnessed_end_time is not None:
             errors.append(f"Witness times for {item.character_name} require a named witness.")
 
+        if item.claim_truthfulness == "truthful":
+            if item.lie_explanation or item.exposure_clue_title:
+                errors.append(
+                    f"Truthful whereabouts for {item.character_name} cannot include lie metadata."
+                )
+        else:
+            if not item.lie_explanation:
+                errors.append(f"False or partial whereabouts for {item.character_name} need a facilitator explanation.")
+            if not item.exposure_clue_title:
+                errors.append(f"False or partial whereabouts for {item.character_name} need an exposure clue.")
+            elif item.exposure_clue_title not in {clue.title for clue in case.clues}:
+                errors.append(
+                    f"Unknown exposure clue for {item.character_name}: {item.exposure_clue_title}."
+                )
+
     for clue in case.clues:
         unknown_names = set(clue.implicates) - name_set
         if unknown_names:
@@ -383,6 +511,152 @@ def validate_case(
         errors.append("Player-facing narrative must not directly identify the murderer.")
 
     return errors
+
+
+REVIEW_PROMPT = """Review this mystery case as a continuity editor and fair-play puzzle designer.
+Return a structured review. Do not rewrite the case in this step.
+
+Check specifically for:
+- Contradictions between the solution's actual events and each character's whereabouts, exact interval, location, and witness account.
+- A mismatch is intentional only when that whereabouts record is marked partial/deliberate_lie, has a facilitator explanation, names an existing exposure clue, and the solution explains the deception. Otherwise report it as critical.
+- The culprit, murder time/location, weapon, motive, physical evidence, and forensic comparison must agree across the private case, player handout, Act II reveal, role packets, and solution.
+- Players must be able to discover a defensible solution from the shared clues and the private facts the rules ask them to reveal. Do not require unstated facts or assumptions that appear only in the solution.
+- Red herrings and secrets are allowed. Do not call an accusation, suspect motive, or suspicious secret a contradiction merely because it implicates an innocent person.
+- Do not demand that the culprit be exonerated by an alibi, and do not treat a knowingly false culprit account as a defect if it is explicitly marked and discoverable.
+- Each issue must cite the conflicting fields or exact player-facing materials. If the issue is only stylistic, use minor severity.
+
+Set approved=true only when there are no critical or major issues. Use major for issues that materially impair fairness or make the solution unsupported; critical for direct contradictions or broken core facts.
+
+OUTPUT LANGUAGE: {language}
+
+PRIVATE CASE DATA:
+{case_json}
+
+PLAYER HANDOUT:
+{player_handout}
+
+ACT II REVEAL:
+{act_two_reveal}
+
+PRIVATE PLAYER PACKETS:
+{player_packets}
+
+FACILITATOR SOLUTION:
+{solution}
+"""
+
+
+REPAIR_PROMPT = """Repair this reviewed mystery case. Return a complete object matching the MysteryCase schema.
+
+Apply the listed critical and major findings, and only make adjacent changes required to restore consistency. Keep all player character names, their order, their gender values, the victim, and the murderer_name unchanged. Preserve the requested language and cast constraints. Do not remove intentional red herrings. Never turn a deliberate lie into a truthful account without also reconciling the solution and clues. If retaining an intentional lie, keep its facilitator-only explanation and existing player-discoverable exposure clue consistent.
+
+Any deterministic validation errors listed below must also be fixed.
+
+OUTPUT LANGUAGE: {language}
+EXPECTED CULPRIT (must remain unchanged): {murderer_name}
+EXPECTED PLAYER ROSTER IN ORDER (names and genders must remain unchanged): {roster_json}
+
+CURRENT CASE:
+{case_json}
+
+REVIEW FINDINGS:
+{findings_json}
+
+DETERMINISTIC VALIDATION ERRORS:
+{validation_errors}
+"""
+
+
+def review_case(case: MysteryCase, language: str) -> CaseReview:
+    model = get_model().with_structured_output(CaseReview, method="json_schema")
+    packets = {
+        character.name: render_character_packet(case, character, language)
+        for character in case.characters
+    }
+    prompt = REVIEW_PROMPT.format(
+        language=language,
+        case_json=json.dumps(case.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        player_handout=render_player_handout(case, language),
+        act_two_reveal=render_act_two_reveal(case, language),
+        player_packets=json.dumps(packets, ensure_ascii=False, indent=2),
+        solution=render_solution(case, language),
+    )
+    result = model.invoke(prompt)
+    if isinstance(result, CaseReview):
+        return result
+    return CaseReview.model_validate(result)
+
+
+def repair_case(
+    case: MysteryCase,
+    review: CaseReview,
+    language: str,
+    validation_errors: list[str] | None = None,
+) -> MysteryCase:
+    model = get_model().with_structured_output(MysteryCase, method="json_schema")
+    roster = [{"name": item.name, "gender": item.gender} for item in case.characters]
+    prompt = REPAIR_PROMPT.format(
+        language=language,
+        murderer_name=case.murderer_name,
+        roster_json=json.dumps(roster, ensure_ascii=False),
+        case_json=json.dumps(case.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        findings_json=json.dumps(review.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        validation_errors=json.dumps(validation_errors or [], ensure_ascii=False, indent=2),
+    )
+    result = model.invoke(prompt)
+    if isinstance(result, MysteryCase):
+        return result
+    return MysteryCase.model_validate(result)
+
+
+def review_and_repair_case(
+    case: MysteryCase,
+    requested_count: int,
+    requested_female_characters: int | None,
+    language: str,
+    progress_callback: Callable[[str], None] | None = None,
+    max_repairs: int = 2,
+) -> MysteryCase:
+    original_murderer = case.murderer_name
+    original_roster = [(item.name, item.gender) for item in case.characters]
+    latest_errors: list[str] = []
+    latest_blockers: list[CaseReviewIssue] = []
+
+    for review_round in range(max_repairs + 1):
+        if progress_callback:
+            progress_callback(f"Reviewing story continuity and player solvability (check {review_round + 1}/{max_repairs + 1})...")
+        review = review_case(case, language)
+        blockers = [issue for issue in review.issues if issue.severity in {"critical", "major"}]
+        latest_blockers = blockers
+        latest_errors = validate_case(case, requested_count, requested_female_characters)
+        if not blockers and not latest_errors:
+            if progress_callback:
+                progress_callback("Semantic review approved the case.")
+            return case
+        if review_round == max_repairs:
+            break
+
+        if progress_callback:
+            progress_callback(
+                f"Repairing {len(blockers)} major continuity/solvability issue(s)..."
+            )
+        case = repair_case(case, review, language, latest_errors)
+        roster_after = [(item.name, item.gender) for item in case.characters]
+        if case.murderer_name != original_murderer:
+            raise ValueError("Semantic repair changed the originally selected murderer.")
+        if roster_after != original_roster:
+            raise ValueError("Semantic repair changed the player roster or gender assignments.")
+        latest_errors.extend(
+            error
+            for error in validate_case(case, requested_count, requested_female_characters)
+            if error not in latest_errors
+        )
+
+    semantic_details = [
+        f"{issue.category}: {issue.explanation}" for issue in latest_blockers
+    ]
+    detail = "; ".join([*latest_errors, *semantic_details]) or "semantic reviewer still reports major issues"
+    raise ValueError(f"Case was not approved after {max_repairs} repair(s): {detail}")
 
 
 def generate_case(
@@ -425,13 +699,25 @@ def generate_case(
         case = structured_model.invoke(retry_prompt)
         if not isinstance(case, MysteryCase):
             case = MysteryCase.model_validate(case)
+        case, inferred_witnesses = infer_missing_witness_intervals(case)
+        if progress_callback and inferred_witnesses:
+            progress_callback(
+                "Filled missing witness intervals from overlapping times and locations for: "
+                + ", ".join(inferred_witnesses)
+            )
         if progress_callback:
             progress_callback("Checking character references, clues, and spoiler constraints...")
         last_errors = validate_case(case, number_of_characters, female_characters)
         if not last_errors:
             if progress_callback:
-                progress_callback("Case passed all consistency checks.")
-            return case
+                progress_callback("Local structural checks passed.")
+            return review_and_repair_case(
+                case,
+                requested_count=number_of_characters,
+                requested_female_characters=female_characters,
+                language=language,
+                progress_callback=progress_callback,
+            )
         if progress_callback and attempt < 2:
             progress_callback(f"Found {len(last_errors)} consistency issue(s); retrying...")
 
@@ -583,6 +869,17 @@ def render_solution(case: MysteryCase, language: str = "English") -> str:
         f"- **{item.character_name}:** {item.account} ({text['interval'].casefold()}: {item.start_time}–{item.end_time}; {text['location_label'].casefold()}: {item.location}; {text['corroborating_witness'].casefold()}: {item.witness_name or text['witness_none']}; {text['witness_interval'].casefold()}: {item.witnessed_start_time or text['witness_none']}–{item.witnessed_end_time or text['witness_none']})"
         for item in case.whereabouts
     )
+    deceptive_claims = [
+        item for item in case.whereabouts if item.claim_truthfulness != "truthful"
+    ]
+    if deceptive_claims:
+        lines.extend(["", f"## {text['deceptive_accounts']}"])
+        lines.extend(
+            f"- **{item.character_name} ({text['claim_truthfulness'].casefold()}: {item.claim_truthfulness}):** "
+            f"{text['lie_explanation']}: {item.lie_explanation} "
+            f"({text['exposure_clue'].casefold()}: {item.exposure_clue_title})"
+            for item in deceptive_claims
+        )
     lines.extend(["", f"## {text['clue_implications']}"])
     lines.extend(f"- **{item.title}:** {', '.join(item.implicates)}" for item in case.clues)
     return "\n".join(lines).rstrip() + "\n"

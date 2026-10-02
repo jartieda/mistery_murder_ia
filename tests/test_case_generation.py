@@ -5,6 +5,8 @@ from unittest.mock import Mock, patch
 
 from case_generation import (
     Character,
+    CaseReview,
+    CaseReviewIssue,
     Clue,
     Motive,
     MysteryCase,
@@ -13,10 +15,13 @@ from case_generation import (
     case_to_graph_data,
     generate_case,
     get_model,
+    infer_missing_witness_intervals,
     render_act_two_reveal,
     render_character_packet,
     render_player_handout,
     render_solution,
+    review_and_repair_case,
+    review_case,
     validate_case,
     write_case_files,
 )
@@ -66,7 +71,86 @@ def sample_case() -> MysteryCase:
     )
 
 
+def approved_review() -> CaseReview:
+    return CaseReview(approved=True, summary="No major continuity problems found.", issues=[])
+
+
+def major_review() -> CaseReview:
+    return CaseReview(
+        approved=False,
+        summary="The culprit's timeline conflicts with the solution.",
+        issues=[
+            CaseReviewIssue(
+                severity="critical",
+                category="timeline contradiction",
+                explanation="The culprit claims to be elsewhere during the murder.",
+                affected_fields=["whereabouts[0]", "solution"],
+                suggested_fix="Mark the account as a discoverable lie or align the account with the actual events.",
+            )
+        ],
+    )
+
+
+def minor_review() -> CaseReview:
+    return CaseReview(
+        approved=False,
+        summary="Only a stylistic improvement is suggested.",
+        issues=[
+            CaseReviewIssue(
+                severity="minor",
+                category="style",
+                explanation="One biography could be more concise.",
+                affected_fields=["characters[0].biography"],
+                suggested_fix="Shorten one sentence.",
+            )
+        ],
+    )
+
+
 class CaseValidationTests(unittest.TestCase):
+    def test_missing_witness_times_infer_from_matching_overlap(self) -> None:
+        case = sample_case()
+        whereabouts = list(case.whereabouts)
+        whereabouts[1] = whereabouts[1].model_copy(
+            update={
+                "location": "The main gallery",
+                "witnessed_start_time": None,
+                "witnessed_end_time": None,
+            }
+        )
+        whereabouts[2] = whereabouts[2].model_copy(update={"location": "The main gallery"})
+        incomplete_case = case.model_copy(update={"whereabouts": whereabouts})
+
+        repaired_case, inferred_for = infer_missing_witness_intervals(incomplete_case)
+        repaired_whereabouts = repaired_case.whereabouts[1]
+
+        self.assertEqual(inferred_for, ["Ezra Cole"])
+        self.assertEqual(repaired_whereabouts.witnessed_start_time, "22:25")
+        self.assertEqual(repaired_whereabouts.witnessed_end_time, "22:30")
+        self.assertEqual(validate_case(repaired_case, requested_count=3), [])
+
+    def test_inferred_murderer_witness_interval_excludes_death_time(self) -> None:
+        case = sample_case()
+        whereabouts = list(case.whereabouts)
+        whereabouts[0] = whereabouts[0].model_copy(
+            update={
+                "location": "The main gallery",
+                "witness_name": "Ezra Cole",
+                "witnessed_start_time": None,
+                "witnessed_end_time": None,
+            }
+        )
+        whereabouts[1] = whereabouts[1].model_copy(update={"location": "The main gallery"})
+        incomplete_case = case.model_copy(update={"whereabouts": whereabouts})
+
+        repaired_case, inferred_for = infer_missing_witness_intervals(incomplete_case)
+        murderer_account = repaired_case.whereabouts[0]
+
+        self.assertEqual(inferred_for, ["Mira Vale"])
+        self.assertEqual(murderer_account.witnessed_start_time, "22:09")
+        self.assertEqual(murderer_account.witnessed_end_time, "22:14")
+        self.assertEqual(validate_case(repaired_case, requested_count=3), [])
+
     def test_generation_reports_attempt_validation_and_retry_stages(self) -> None:
         invalid_case = sample_case().model_copy(update={"murderer_name": "Unknown Suspect"})
         structured_model = Mock()
@@ -75,7 +159,9 @@ class CaseValidationTests(unittest.TestCase):
         model.with_structured_output.return_value = structured_model
         progress: list[str] = []
 
-        with patch("case_generation.get_model", return_value=model):
+        with patch("case_generation.get_model", return_value=model), patch(
+            "case_generation.review_case", return_value=approved_review()
+        ):
             case = generate_case(3, progress_callback=progress.append)
 
         self.assertEqual(case.murderer_name, "Mira Vale")
@@ -83,7 +169,7 @@ class CaseValidationTests(unittest.TestCase):
         self.assertIn("Checking character references", progress[1])
         self.assertIn("retrying", progress[2])
         self.assertIn("attempt 2/3", progress[3])
-        self.assertIn("passed all consistency checks", progress[-1])
+        self.assertIn("approved", progress[-1])
 
     def test_generation_prompt_receives_language_and_gender_count(self) -> None:
         structured_model = Mock()
@@ -91,7 +177,9 @@ class CaseValidationTests(unittest.TestCase):
         model = Mock()
         model.with_structured_output.return_value = structured_model
 
-        with patch("case_generation.get_model", return_value=model):
+        with patch("case_generation.get_model", return_value=model), patch(
+            "case_generation.review_case", return_value=approved_review()
+        ):
             generate_case(3, language="Spanish", female_characters=2)
 
         prompt = structured_model.invoke.call_args.args[0]
@@ -111,7 +199,9 @@ class CaseValidationTests(unittest.TestCase):
         model.with_structured_output.return_value = structured_model
         progress: list[str] = []
 
-        with patch("case_generation.get_model", return_value=model):
+        with patch("case_generation.get_model", return_value=model), patch(
+            "case_generation.review_case", return_value=approved_review()
+        ):
             case = generate_case(3, progress_callback=progress.append, female_characters=2)
 
         self.assertEqual(sum(character.gender == "female" for character in case.characters), 2)
@@ -164,6 +254,125 @@ class CaseValidationTests(unittest.TestCase):
         self.assertTrue(
             any("same stated location" in error for error in validate_case(invalid_case, 3))
         )
+
+    def test_deliberate_lie_requires_explanation_and_exposure_clue(self) -> None:
+        case = sample_case()
+        whereabouts = list(case.whereabouts)
+        whereabouts[0] = whereabouts[0].model_copy(
+            update={
+                "claim_truthfulness": "deliberate_lie",
+                "lie_explanation": "Mira says she stayed in the reading room, but she entered the archive to confront Rowan.",
+                "exposure_clue_title": "A damp key tag",
+            }
+        )
+        deliberate_lie_case = case.model_copy(update={"whereabouts": whereabouts})
+        self.assertEqual(validate_case(deliberate_lie_case, 3), [])
+
+        whereabouts[0] = whereabouts[0].model_copy(update={"exposure_clue_title": None})
+        invalid_case = case.model_copy(update={"whereabouts": whereabouts})
+        self.assertTrue(
+            any("need an exposure clue" in error for error in validate_case(invalid_case, 3))
+        )
+
+    def test_semantic_review_repairs_major_finding_and_rechecks(self) -> None:
+        with patch(
+            "case_generation.review_case",
+            side_effect=[major_review(), approved_review()],
+        ) as reviewer, patch(
+            "case_generation.repair_case", return_value=sample_case()
+        ) as repairer:
+            reviewed_case = review_and_repair_case(
+                sample_case(),
+                requested_count=3,
+                requested_female_characters=2,
+                language="English",
+                max_repairs=2,
+            )
+
+        self.assertEqual(reviewed_case.murderer_name, "Mira Vale")
+        self.assertEqual(reviewer.call_count, 2)
+        self.assertEqual(repairer.call_count, 1)
+        self.assertEqual(repairer.call_args.args[1], major_review())
+
+    def test_semantic_review_fails_closed_after_repair_limit(self) -> None:
+        with patch(
+            "case_generation.review_case",
+            side_effect=[major_review(), major_review()],
+        ), patch("case_generation.repair_case", return_value=sample_case()):
+            with self.assertRaisesRegex(ValueError, "not approved after 1 repair"):
+                review_and_repair_case(
+                    sample_case(),
+                    requested_count=3,
+                    requested_female_characters=2,
+                    language="English",
+                    max_repairs=1,
+                )
+
+    def test_minor_review_note_does_not_trigger_repair(self) -> None:
+        with patch("case_generation.review_case", return_value=minor_review()), patch(
+            "case_generation.repair_case"
+        ) as repairer:
+            result = review_and_repair_case(
+                sample_case(),
+                requested_count=3,
+                requested_female_characters=2,
+                language="English",
+            )
+
+        self.assertEqual(result.murderer_name, "Mira Vale")
+        repairer.assert_not_called()
+
+    def test_reviewer_allows_explicit_discoverable_culprit_lie(self) -> None:
+        case = sample_case()
+        whereabouts = list(case.whereabouts)
+        whereabouts[0] = whereabouts[0].model_copy(
+            update={
+                "claim_truthfulness": "deliberate_lie",
+                "lie_explanation": "Mira left the reading room and entered the archive at the time of death.",
+                "exposure_clue_title": "A damp key tag",
+            }
+        )
+        marked_case = case.model_copy(update={"whereabouts": whereabouts})
+        model_result = Mock()
+        model_result.invoke.return_value = approved_review()
+        model = Mock()
+        model.with_structured_output.return_value = model_result
+
+        with patch("case_generation.get_model", return_value=model):
+            result = review_case(marked_case, "English")
+
+        prompt = model_result.invoke.call_args.args[0]
+        self.assertTrue(result.approved)
+        self.assertIn("deliberate_lie", prompt)
+        self.assertIn("A damp key tag", prompt)
+
+    def test_repair_cannot_change_culprit(self) -> None:
+        changed_case = sample_case().model_copy(update={"murderer_name": "Ezra Cole"})
+        with patch("case_generation.review_case", return_value=major_review()), patch(
+            "case_generation.repair_case", return_value=changed_case
+        ):
+            with self.assertRaisesRegex(ValueError, "originally selected murderer"):
+                review_and_repair_case(
+                    sample_case(),
+                    requested_count=3,
+                    requested_female_characters=2,
+                    language="English",
+                    max_repairs=1,
+                )
+
+    def test_reviewer_receives_player_and_facilitator_views(self) -> None:
+        model_result = Mock()
+        model_result.invoke.return_value = approved_review()
+        model = Mock()
+        model.with_structured_output.return_value = model_result
+
+        with patch("case_generation.get_model", return_value=model):
+            review_case(sample_case(), "English")
+
+        prompt = model_result.invoke.call_args.args[0]
+        self.assertIn("PLAYER HANDOUT:", prompt)
+        self.assertIn("PRIVATE PLAYER PACKETS:", prompt)
+        self.assertIn("FACILITATOR SOLUTION:", prompt)
 
     def test_act_two_forensic_weapon_match_is_required(self) -> None:
         case = sample_case()
