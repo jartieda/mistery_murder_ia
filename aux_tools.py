@@ -1,6 +1,6 @@
 import json
 from typing import List, Dict, Any, Optional
-from langchain.tools import StructuredTool, BaseTool
+from langchain_core.tools import StructuredTool, BaseTool
 
 MAX_TRIES = 100
 

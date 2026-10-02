@@ -1,187 +1,67 @@
-# %%
-import random
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain_core.prompts import PromptTemplate
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
-from langchain.docstore.document import Document
-import networkx as nx
-import matplotlib.pyplot as plt
-import json
+"""Generate a validated mystery case and write its player/facilitator files."""
 
-from langchain_community.graphs.graph_document import (
-    Node as BaseNode,
-    Relationship as BaseRelationship
-)
-from typing import List, Dict, Any, Optional
-from langchain.pydantic_v1 import Field, BaseModel
-from langgraph.prebuilt import create_react_agent
-from langchain_core.messages.human import HumanMessage
-from langchain.tools import StructuredTool, BaseTool
+import argparse
+from pathlib import Path
 
-from dotenv import load_dotenv
-load_dotenv("env_keys")
+from case_generation import generate_case, write_case_files
+from mm_graph import draw_case_graph
 
-from aux_tools import render_text_description_and_nested_args
-from mm_tools import (llm_chain_gen_chars, llm_chars_expand, victim_llm,
-                        llm_secret, llm_murder, llm_alibi, llm_motiv)
-from mm_graph import draw_graph, extract_and_store_graph
-# %%
-llm = ChatNVIDIA(model="mistralai/mixtral-8x7b-instruct-v0.1")
-#llm = ChatNVIDIA(model="meta/llama3-70b-instruct")
-#llm = ChatNVIDIA(model="google/gemma-7b")
-#llm = ChatNVIDIA(model="meta/llama3-8b-instruct")
 
-# %% 
-#generte characters
-number_of_characters = 6
+def show_progress(message: str) -> None:
+    print(f"    {message}", flush=True)
 
-chars_raw = llm_chain_gen_chars.invoke({"number_of_characters": number_of_characters})
 
-print(chars_raw)
-# %%
-#chars_array = chars_raw.split("Character: ")
-#chars_final = []
-#for c in chars_array:
-#    print(c)
-#    p = c.split(" - ")
-#    if len(p) == 2:
-#        chars_final.append({'name':p[0], 'short':p[1]})
-#print(chars_final)
-chars_final = chars_raw['characters']
-print(chars_final)
-# %%
-#for c in chars_final:
-#    c['longbio'] = llm_chars_expand.invoke({'name':c['name'], 'short_description':c['short']})
-#    print(c)
- 
-# %%
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--characters", type=int, default=5, help="number of player characters (3-12)")
+    parser.add_argument(
+        "--language",
+        default="English",
+        help="language for all generated case text (for example: Spanish, English, French)",
+    )
+    parser.add_argument(
+        "--female-characters",
+        type=int,
+        help="exact number of female player characters; the victim is not counted",
+    )
+    parser.add_argument("--output-dir", type=Path, default=Path("output"))
+    parser.add_argument("--no-graph", action="store_true", help="skip the private case graph")
+    args = parser.parse_args()
 
-victimraw = victim_llm.invoke({'characters': chars_final})
-victim = victimraw
-print(victim)
+    female_count_status = (
+        f"{args.female_characters} female player characters"
+        if args.female_characters is not None
+        else "no fixed female-character count"
+    )
+    print(
+        f"[1/4] Generating a {args.language} case for {args.characters} players "
+        f"({female_count_status})...",
+        flush=True,
+    )
+    case = generate_case(
+        args.characters,
+        progress_callback=show_progress,
+        language=args.language,
+        female_characters=args.female_characters,
+    )
 
-# %%
-for c in chars_final:
-    print(c)
-    motive = llm_motiv.invoke({'victim_name':victim['name'], 
-                               'victim_short_description':victim['short'], 
-                               'name':c['name'], 'short_bio':c['short']})
-    print(motive)
-    c['motive'] = motive
-
-# %%
-
-for i in range(len(chars_final)):
-    if i == len(chars_final) - 1:
-        dest = 0
+    print("[2/4] Writing the player handout, role packets, and facilitator solution...", flush=True)
+    paths = write_case_files(case, args.output_dir, language=args.language)
+    if not args.no_graph:
+        print("[3/4] Rendering the facilitator-only case graph...", flush=True)
+        graph_path = args.output_dir / "case.private.png"
+        draw_case_graph(case, graph_path, language=args.language)
+        paths["private_graph"] = graph_path
     else:
-        dest = i+1
+        print("[3/4] Skipping the case graph (--no-graph).", flush=True)
 
-    chars_final[dest]['secret']= llm_secret.invoke({'character':chars_final[i]['name'],
-                                               'victim':victim['name'], 
-                                               'victim_short': victim['short'],
-                                               'secret_holder':chars_final[dest]['name'],
-                                               'character_full': chars_final})
-    print("--------\n", chars_final[i]['name'], 
-          "known by:" , chars_final[dest]['name'],
-          "---", chars_final[dest]['secret'])
-
-# %%
-# random selection of murderer 
-murderer = random.randint(0, len(chars_final)-1)
-print(f"the murderer is {chars_final[murderer]['name']}")
-
-# %%
-
-murder_circustances_raw = llm_murder.invoke({'victim':victim['name'], 
-                                             'victim_short': victim['short'],
-                                      'murderer':chars_final[murderer]['name'], 
-                                      'characters': chars_final
-                                    })
-murder_split = murder_circustances_raw.split(" - ")
-if (len(murder_split) == 2):
-    murder_circustances = murder_split[1]
-    murder_hour = murder_split[0]
-
-    print(murder_hour, murder_circustances)
-else: 
-    murder_circustances = murder_circustances_raw
-    print(murder_circustances)
-
-# %%
-
-rest_chars = ""
-for c in chars_final:
-    rest_chars += f" - **{c['name']}** - {c['short']} - {c['motive']} - {c['secret']} \n"
-
-for c in chars_final:
-    if c != chars_final[murderer]:
-        alib = llm_alibi.invoke({"character": c["name"], 
-                                 "rest_chars": rest_chars, 
-                                 "circustances": murder_circustances})  
-        
-        c['alibi'] = alib['alibi']
-        for cc in chars_final: 
-
-            if cc['name'].replace('"',"'") == alib['witness'].replace('"',"'"):
-                print("found witness", cc['name'])
-                if not 'others_alibi' in cc:
-                    cc['others_alibi'] = [alib['alibi'],]
-                else:
-                    cc['others_alibi'].append(alib['alibi'])
-                break
-        print(c['name'], "witness: ", alib['witness'], " - ", c['alibi'])
-
-# %%
-
-result = {"characters": chars_final, 
-          "victim": victim,
-          "murderer": murderer,
-          "solution": murder_circustances}
-
-print(result)
-with open('temp.json', 'w') as file:
-    json.dump(result, file)
+    print("[4/4] Generation complete.", flush=True)
+    print(f"Generated case for {len(case.characters)} players in {args.output_dir.resolve()}")
+    print(f"Player handout: {paths['player_handout']}")
+    print(f"Private role packets: {paths['player_packets']}")
+    print(f"Facilitator solution: {paths['solution']}")
+    print("The private case JSON and graph contain the solution; do not distribute them to players.")
 
 
-
-# %%
-## write the full story
-
-result_md = "# Mistery Murder Game\n"
-
-result_md += "## Characters\n"
-
-for c in result["characters"]:
-    result_md += f"### **{c['name']}** \n {c['short']}\n"
-    if "others_alibi" in c:
-        result_md += "#### alibis for other characters\n"
-        for a in c['others_alibi']:
-            result_md += f" - {a}\n"
-    result_md += f"#### secrets known about other characters \n{c['secret']}\n"
-
-result_md += "## Victim\n"
-result_md +=  f"- **{victim['name']}** {victim['short']}\n"
-
-result_md += "## Murderer\n"
-result_md += f"The murderer is {result['characters'][murderer]['name']}\n"
-result_md += "### Circustances of the murder\n"
-result_md += murder_circustances + "\n"
-
-# save result_md to a file with .md extension
-with open('temp.md', 'w') as file:
-    file.write(result_md)
-
-print(result_md)
-
-    
-# %%
-doc =  Document(page_content=result_md, metadata={"source": "local"})
-
-graphout = extract_and_store_graph(doc,nodes = ["person", "victim"], 
-                                   rels=["knows_about", "murdered", "alibi",
-                                          "motive"])
-
-draw_graph(graphout)
-# %%
+if __name__ == "__main__":
+    main()

@@ -1,85 +1,61 @@
-# Mystery Murder diner games with AI
+# Mystery Murder Games with AI
 
-The objective of this project is to demonstrate llm capabilities to generate complex interrelated stories.
+This project generates a structured, playable murder-mystery case. One canonical case file is checked for consistency before the player handout, private role packets, and facilitator solution are rendered.
 
-Mystery Murder Dinner Games are Agatha Christie inspired Rol games where each person plays a character involved into a murder. The story has multiple interrelated characters with different motives and stories. To provide an interesting game play all characters must have information about the relation of other characters with the victim. Also, we must provide means to the players to resolve the murder. 
+## Requirements
 
-From the AI perspective there are several challenges for generating this Rol-game: 
-- Logical consistency must be maintained along several prompts. 
-- Problem complexity grows with the number of players. 
-- Complex information must be transferred between prompts. 
+- Python 3.10 or newer
+- A Google Cloud project with the Vertex AI API enabled and billing configured
+- Application Default Credentials with permission to use Vertex AI (for example, `roles/aiplatform.user`)
 
-![MMD Tools](example/tools.gif "MMD Tools")
+## Setup
 
+Activate the project environment and install dependencies:
 
-# Chain based solution
-
-First approach to the problem is using a chain of prompts to create the story. The following prompts are defined: 
-- Character Creation 
-- Victim Generation
-- Motive Generation for each character. 
-- Secrets: each character knows a secret of the relation of other character with the victim. 
-- Murder circumstances: time of murder and murderer selection 
-- Alibis: each character is able a to exculpate another character from the murder. The murderer is not exculpated by any alibi. 
-
-# Graph consistency check
-
-To check the consistency of the story LLM are used to create a knowledge graph with all the variables of the story. this knowledge graph can be represented in a diagram to quick review the story. 
-
-![Example consistency graph](example/graph.png "Example consistency graph")
-
-# Agent based solution
-
-Due to the high complexity of the stories a lot of inconsistencies are found. Those inconsistencies could be solved easily with a manual review, but an automatic solution should be made. REACT Agents technology allow the system to review the story using the knowledge graph and regenerate the inconsistent parts. 
-
-Several emerged behaviors have emerged from the use of agents. One of the most interesting is that the model started using generic names for characters. e.g. Character 1, Character 2, etc... This resulted in a more consistent reference to the characters among the calls. Chains had the problem of using full names to reference other characters and successive calls had problems if the name had slightly changed. 
-
-![Example agent execution](example/agent_execution.png) "Example agent execution")
-
-# running
-create env_keys file with this line
-
-```
-NVIDIA_API_KEY='nvapi-xxxxxxxxxxxxx'
+```bash
+source /home/jartieda/venv_mistery_murder_ia/bin/activate
+pip install -r requirements.txt
 ```
 
-install requirements
+Authenticate with Google Cloud's default credential flow. No Gemini API key or `NVIDIA_API_KEY` is required:
 
-```
-pip install -r requirements
-```
-
-for running the chain based tool we run 
-
-```
-python generate1.py
+```bash
+gcloud auth application-default login
+gcloud config set project YOUR_GOOGLE_CLOUD_PROJECT
+gcloud services enable aiplatform.googleapis.com
+export GOOGLE_CLOUD_PROJECT=YOUR_GOOGLE_CLOUD_PROJECT
+export GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
-for running the agent based tool we run
+The model defaults to `gemini-2.5-flash`. Override it with `GEMINI_MODEL` when needed.
 
+## Generate a Case
+
+```bash
+python generate1.py --characters 5 --language Spanish --female-characters 3 --output-dir output
 ```
-python generate_with_agent.py 
-```
 
-# Example results
+`--language` sets the language used for all generated case text and defaults to `English`. The handout, private packets, Act II reveal, solution, and graph use Spanish headings and instructions when the language is `Spanish` (or `es`); English is used for built-in labels in other languages. `--female-characters` requests an exact number of female player characters; it is optional, and the victim is not included in that count. The character count must be between 3 and 12, and the requested female count must be between zero and the player count. The generator checks the returned gender labels and retries if the requested number is not met. The default command creates:
 
-[chain based result](example/story.md)
+The CLI reports generation, validation attempts and retries, file writing, and graph rendering as they happen.
 
-[agend based result](example/agent_result.md)
+- `output/player_handout.md`: shared, spoiler-free premise, cast, incident, and clues
+- `output/act_ii_reveal.md`: facilitator-delivered clue sheet to reveal when Act II begins
+- `output/player_packets/`: one private role sheet per character; distribute each only to its player
+- `output/solution.md`: facilitator-only culprit and explanation
+- `output/case.private.json`: complete canonical case data; facilitator-only
+- `output/case.private.png`: graph of the canonical case; facilitator-only
 
+The shared handout contains Act I clues only. Keep `act_ii_reveal.md` back until Act II, and keep `solution.md` facilitator-only until the resolution phase.
 
+Use `--no-graph` to skip the graph. The legacy `generate_with_agent.py` command remains available and now invokes the same validated pipeline; the previous free-form ReAct loop was removed because it discarded tool results and did not reliably validate the case.
 
-# chars structure
-```
-chars_final = [ {"name": 
-                "short":
-                "long_bio": 
-                "motive": 
-                "secret":
-                }]
-victim ={"name": 
-        "short":
-        "long_bio":}
+## Validation
 
-murderer: int
+The generator checks cast size and uniqueness, murderer and witness references, secret subjects, per-character motives, and clue references before writing files. Death time and every whereabouts interval use 24-hour `HH:MM`; each account must cover the death time, and a witness must share the stated location and provide a bounded observation interval. The murderer cannot have a witness covering the moment of death. Exactly one Act II clue is required to carry a specific weapon-to-origin comparison, which is printed in the player reveal rather than being left only in the facilitator solution. Generation retries up to three times when the returned case fails these checks. The checks cover structured consistency; they do not replace a human review of narrative plausibility.
+
+Run the offline checks with:
+
+```bash
+python -m unittest discover -s tests -v
 ```
