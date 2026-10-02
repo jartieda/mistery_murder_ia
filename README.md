@@ -50,6 +50,18 @@ The shared handout contains Act I clues only. Keep `act_ii_reveal.md` back until
 
 Use `--no-graph` to skip the graph. The legacy `generate_with_agent.py` command remains available and now invokes the same validated pipeline; the previous free-form ReAct loop was removed because it discarded tool results and did not reliably validate the case.
 
+## Create Print PDFs
+
+After generating the Markdown files, build the player PDFs:
+
+```bash
+python make_print_pdfs.py --input-dir output --paper A4
+```
+
+The tool auto-detects Spanish or English headings; set `--language Spanish` or `--language English` to choose the printed labels explicitly. `--paper Letter` selects US Letter instead of A4. It creates `output/print-ready/players/` with one PDF per player, each containing a full repeated copy of the shared handout followed by only that player's private role sheet. It creates `output/print-ready/act-ii/` with one separate Act II clue sheet per player, so these can be held back and distributed when that phase begins. No facilitator solution is included. `INSTRUCCIONES-DE-IMPRESION.md` lists the PDFs and the number of repeated copies needed.
+
+The layout embeds Unicode-capable fonts, uses clear section hierarchy and restrained decorative rules, and adds page headers and numbering. PDFs use printer-friendly white pages, A4 by default, and generous margins.
+
 ## Validation
 
 The generator checks cast size and uniqueness, murderer and witness references, secret subjects, per-character motives, and clue references before writing files. Death time and every whereabouts interval use 24-hour `HH:MM`; each account must cover the death time, and a witness must share the stated location and provide a bounded observation interval. When Gemini names a witness but omits the observed interval, the generator infers a five-minute window only if both accounts overlap in time and location; it will not infer a window over the culprit's death minute. The murderer cannot have a witness covering the moment of death. An intentional false or partial whereabouts claim must be marked with a facilitator explanation and a clue that lets players expose it. Exactly one Act II clue is required to carry a specific weapon-to-origin comparison, which is printed in the player reveal rather than being left only in the facilitator solution.
